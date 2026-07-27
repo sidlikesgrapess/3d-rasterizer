@@ -1,2 +1,2 @@
 @echo off
-powershell -NoProfile -Command "if (!(Test-Path builds)) { New-Item -ItemType Directory -Path builds | Out-Null }; x86_64-w64-mingw32-g++ -std=c++17 -O2 olcPixelGameEngine.cpp main.cpp -o builds\rasterizer.exe -luser32 -lgdi32 -lopengl32 -lwinmm -lgdiplus -lshlwapi -ldwmapi; if ($LASTEXITCODE -eq 0) { Start-Process .\builds\rasterizer.exe; 'Build ok, launched.' } else { 'Build failed.' }"
+powershell -NoProfile -Command "if (!(Test-Path builds)) { New-Item -ItemType Directory -Path builds | Out-Null }; g++ -std=c++17 -O2 main.cpp -L. -lSDL2 -o builds\rasterizer.exe; if ($LASTEXITCODE -eq 0) { Start-Process .\builds\rasterizer.exe; 'Build ok, launched.' } else { 'Build failed.' }"
