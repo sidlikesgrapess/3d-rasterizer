@@ -1,3 +1,4 @@
+#include "headers/SDL2/SDL_mouse.h"
 #include "headers/SDL2/SDL_scancode.h"
 #define SDL_MAIN_HANDLED
 #include "headers/SDL2/SDL.h"
@@ -10,8 +11,8 @@
 
 using namespace std;
 
-const int screenW = 600;
-const int screenH = 600;
+const int screenW = 1024;
+const int screenH = 1024;
 SDL_Renderer *renderer = nullptr;
 vector<uint32_t>
 screen_buffer(screenW *screenH); // y *screenW+x = index of pixel
@@ -118,8 +119,8 @@ struct Mesh {
 class Engine3D {
 public:
   Engine3D() {}
+#pragma region vars
   const Uint8 *keystate = nullptr;
-
   Mesh mesh;
   float dz = 1.0f / 120.0f;
   float angle = 0.0f;
@@ -128,7 +129,99 @@ public:
   float fov = 90.0f;
   float y_offset = 0.0f;
   float dy = 1.0f / 120.0f;
+  Vec3D light_dir = {1, -1, -1};
+  Px2D mousepos;
+#pragma endregion
 
+  bool OnUserCreate() {
+    mesh = OBJLoader("Object/full_model.obj");
+    return true;
+  }
+
+  bool OnUserUpdate(float fElapsedTime) {
+    keystate = SDL_GetKeyboardState(nullptr);
+    Clear(col::BLACK);
+#pragma region Keyboard input
+    if (keystate[SDL_SCANCODE_Q]) {
+      fov += 0.5f;
+    }
+    if (keystate[SDL_SCANCODE_E]) {
+      fov -= 0.5f;
+    }
+    fov = clamp(fov, 10.0f, 170.0f);
+
+    if (keystate[SDL_SCANCODE_LEFT]) {
+      angle -= 3.14159f * fElapsedTime;
+    }
+    if (keystate[SDL_SCANCODE_RIGHT]) {
+      angle += 3.14159f * fElapsedTime;
+    }
+    if (keystate[SDL_SCANCODE_UP]) {
+      angle2 += 3.14159f * fElapsedTime;
+    }
+    if (keystate[SDL_SCANCODE_DOWN]) {
+      angle2 -= 3.14159f * fElapsedTime;
+    }
+
+    if (keystate[SDL_SCANCODE_S]) {
+      z_offset += dz;
+    }
+    if (keystate[SDL_SCANCODE_W]) {
+      if (z_offset - dz > -0.99f)
+        z_offset -= dz;
+    }
+    if (keystate[SDL_SCANCODE_Z]) {
+      y_offset += dy;
+    }
+    if (keystate[SDL_SCANCODE_X]) {
+      y_offset -= dy;
+    }
+    if (SDL_GetMouseState(&mousepos.x, &mousepos.y) &
+        SDL_BUTTON(SDL_BUTTON_LEFT)) {
+      light_dir = {-(((float)mousepos.x / screenW) * 4.0f - 1.0f),
+                   (((float)mousepos.y / screenH) * 4.0f - 1.0f), 1};
+      light_dir = light_dir.normalized();
+    }
+
+#pragma endregion
+
+#pragma region rendering
+    vector<Triangle> transformed_tri;
+    Vec3D light = {1, -1, -1};
+    light = rotate_yz(rotate_xz(light_dir, angle), angle2);
+    for (const auto &tri : mesh.tris) {
+      Triangle transformed = translate_y_triangle(
+          translate_z_triangle(
+              rotate_yz_triangle(rotate_xz_triangle(tri, angle), angle2),
+              z_offset),
+          y_offset);
+      transformed_tri.push_back(transformed);
+    }
+
+    // 2. painters algo(slow)
+    sort(transformed_tri.begin(), transformed_tri.end(),
+         [](const Triangle &t1, const Triangle &t2) {
+           float z1 = (t1.p[0].z + t1.p[1].z + t1.p[2].z) / 3.0f;
+           float z2 = (t2.p[0].z + t2.p[1].z + t2.p[2].z) / 3.0f;
+           return z1 > z2; // furthest Z rendered first, closest Z rendered last
+         });
+
+    // 3. Render
+    for (const auto &tri : transformed_tri) {
+      Color shaded =
+          Shade_triangle(tri, light_dir, col::GREEN); // 2nd sector = -1 -1
+      Fill_triangle(tri, shaded, fov);
+      // Draw_triangle(tri, col::WHITE, fov);
+    }
+
+    Draw();
+#pragma endregion
+
+    return true;
+  }
+
+#pragma region helper functions
+  // OBJECT LOADER (.obj)
   Mesh OBJLoader(string filePath) {
     ifstream file(filePath);
     if (!file.is_open()) {
@@ -166,90 +259,8 @@ public:
     }
     return mesh;
   }
-#pragma region defs
-  Mesh cube;
-#pragma endregion
+  // ---------------------------------------------------------------
 
-  bool OnUserCreate() {
-    cube = OBJLoader("Object/full_model.obj");
-    return true;
-  }
-
-  bool OnUserUpdate(float fElapsedTime) {
-    keystate = SDL_GetKeyboardState(nullptr);
-    Clear(col::BLACK);
-#pragma region Keyboard input
-    if (keystate[SDL_SCANCODE_Q]) {
-      fov += 0.5f;
-    }
-    if (keystate[SDL_SCANCODE_E]) {
-      fov -= 0.5f;
-    }
-    fov = clamp(fov, 10.0f, 170.0f);
-
-    if (keystate[SDL_SCANCODE_LEFT]) {
-      angle -= 3.14159f * fElapsedTime;
-    }
-    if (keystate[SDL_SCANCODE_RIGHT]) {
-      angle += 3.14159f * fElapsedTime;
-    }
-    if (keystate[SDL_SCANCODE_UP]) {
-      angle2 += 3.14159f * fElapsedTime;
-    }
-    if (keystate[SDL_SCANCODE_DOWN]) {
-      angle2 -= 3.14159f * fElapsedTime;
-    }
-
-    if (keystate[SDL_SCANCODE_S]) {
-      z_offset += dz;
-    }
-    if (keystate[SDL_SCANCODE_W]) {
-      // if(z_offset - dz > -0.99f)
-      z_offset -= dz;
-    }
-    if (keystate[SDL_SCANCODE_Z]) {
-      y_offset += dy;
-    }
-    if (keystate[SDL_SCANCODE_X]) {
-      y_offset -= dy;
-    }
-#pragma endregion
-
-#pragma region rendering
-    vector<Triangle> transformed_tri;
-
-    for (const auto &tri : cube.tris) {
-      Triangle transformed = translate_y_triangle(
-          translate_z_triangle(
-              rotate_yz_triangle(rotate_xz_triangle(tri, angle), angle2),
-              z_offset),
-          y_offset);
-      transformed_tri.push_back(transformed);
-    }
-
-    // 2. painters algo(slow)
-    sort(transformed_tri.begin(), transformed_tri.end(),
-         [](const Triangle &t1, const Triangle &t2) {
-           float z1 = (t1.p[0].z + t1.p[1].z + t1.p[2].z) / 3.0f;
-           float z2 = (t2.p[0].z + t2.p[1].z + t2.p[2].z) / 3.0f;
-           return z1 > z2; // furthest Z rendered first, closest Z rendered last
-         });
-
-    // 3. Render
-    for (const auto &tri : transformed_tri) {
-      Color shaded =
-          Shade_triangle(tri, {1, -1, 1}, col::GREEN); // 2nd sector = -1 -1
-      Fill_triangle(tri, shaded, fov);
-      // Draw_triangle(tri, col::WHITE, fov);
-    }
-
-    Draw();
-#pragma endregion
-
-    return true;
-  }
-
-#pragma region helper functions
   // ALL TRANSFORM FUNCTIONS
   Triangle translate_z_triangle(const Triangle &triangle, float z_offset) {
     Triangle translatedTriangle;
@@ -308,6 +319,7 @@ public:
       screen_buffer[screenPos.y * screenW + screenPos.x] = color.to_hex();
     }
   }
+  //---------------------------------------------------------------------
 
   // ALL DRAW FUNCTIONS
   void Draw() { // once per frame
@@ -444,6 +456,8 @@ public:
       Fill_flat_top_triangle(p1, p3, p2, color);
     }
   }
+  // --------------------------------------------------------------------
+
   // PROJECTION AND SHADING MATH
   Px2D screen(Vec3D point, float fovDegrees = 90.0f) {
     float fovRad = fovDegrees * 0.5f * (3.14159265f / 180.0f);
