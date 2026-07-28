@@ -11,8 +11,8 @@
 
 using namespace std;
 
-const int screenW = 1024;
-const int screenH = 1024;
+const int screenW = 600;
+const int screenH = 600;
 SDL_Renderer *renderer = nullptr;
 vector<uint32_t>
 screen_buffer(screenW *screenH); // y *screenW+x = index of pixel
@@ -208,9 +208,11 @@ public:
 
     // 3. Render
     for (const auto &tri : transformed_tri) {
-      Color shaded =
-          Shade_triangle(tri, light_dir, col::GREEN); // 2nd sector = -1 -1
-      Fill_triangle(tri, shaded, fov);
+      if (!isTriangleCulled(tri, 0.1f)) {
+        Color shaded =
+            Shade_triangle(tri, light_dir, col::GREEN); // 2nd sector = -1 -1
+        Fill_triangle(tri, shaded, fov);
+      }
       // Draw_triangle(tri, col::WHITE, fov);
     }
 
@@ -465,8 +467,8 @@ public:
     float aspect = (float)screenW / (float)screenH;
 
     float z = point.z;
-    if (z <= 0.0001f) // fallback for now
-      z = 0.0001f;
+    if (z <= 0.001f) // fallback for now
+      z = 0.001f;
     float invZ = 1.0f / z;
 
     float x_ndc = (point.x * f / aspect) * invZ; // normalize to aspect ratio
@@ -494,6 +496,24 @@ public:
     light_intensity = clamp(light_intensity, 0.15f, 1.0f);
 
     return color * light_intensity;
+  }
+
+  bool isTriangleCulled(Triangle tri, float cull_dist) {
+    if (tri.p[0].z < cull_dist || tri.p[1].z < cull_dist ||
+        tri.p[2].z < cull_dist) {
+      return true;
+    }
+    Vec3D v0 = tri.p[0];
+    Vec3D v1 = tri.p[1];
+    Vec3D v2 = tri.p[2];
+    Vec3D cam = {0, 0, 0};
+    Vec3D l1 = v0 - v1;
+    Vec3D l2 = v2 - v1;
+
+    Vec3D normal = l1.cross(l2);
+    normal = normal.normalized();
+    float angle = normal.dot(cam - v1);
+    return (angle > 0.0f) ? true : false;
   }
 
 #pragma endregion
