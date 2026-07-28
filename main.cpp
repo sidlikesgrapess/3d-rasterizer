@@ -25,6 +25,30 @@ struct Color {
     return (static_cast<uint32_t>(r) << 24) | (static_cast<uint32_t>(g) << 16) |
            (static_cast<uint32_t>(b) << 8) | static_cast<uint32_t>(a);
   }
+  Color operator+(const Color &other) const {
+    return {static_cast<Uint8>((r + other.r) > 255 ? 255 : r + other.r),
+            static_cast<Uint8>((g + other.g) > 255 ? 255 : g + other.g),
+            static_cast<Uint8>((b + other.b) > 255 ? 255 : b + other.b),
+            static_cast<Uint8>((a + other.a) > 255 ? 255 : a + other.a)};
+  }
+  Color operator-(const Color &other) const {
+    return {static_cast<Uint8>((r - other.r) < 0 ? 0 : r - other.r),
+            static_cast<Uint8>((g - other.g) < 0 ? 0 : g - other.g),
+            static_cast<Uint8>((b - other.b) < 0 ? 0 : b - other.b),
+            static_cast<Uint8>((a - other.a) < 0 ? 0 : a - other.a)};
+  }
+  Color operator*(const float scalar) const {
+    return {static_cast<Uint8>((r * scalar) > 255 ? 255 : r * scalar),
+            static_cast<Uint8>((g * scalar) > 255 ? 255 : g * scalar),
+            static_cast<Uint8>((b * scalar) > 255 ? 255 : b * scalar),
+            static_cast<Uint8>((a * scalar) > 255 ? 255 : a * scalar)};
+  }
+  Color operator/(const float scalar) const {
+    return {static_cast<Uint8>(r / scalar > 255 ? 255 : r / scalar),
+            static_cast<Uint8>(g / scalar > 255 ? 255 : g / scalar),
+            static_cast<Uint8>(b / scalar > 255 ? 255 : b / scalar),
+            static_cast<Uint8>(a / scalar > 255 ? 255 : a / scalar)};
+  }
 };
 
 namespace col {
@@ -39,6 +63,40 @@ inline Color RANDOM() {
 
 struct Vec3D {
   float x, y, z;
+
+  Vec3D operator+(const Vec3D &other) const {
+    return {x + other.x, y + other.y, z + other.z};
+  }
+
+  Vec3D operator-(const Vec3D &other) const {
+    return {x - other.x, y - other.y, z - other.z};
+  }
+
+  Vec3D operator*(const float scalar) const {
+    return {x * scalar, y * scalar, z * scalar};
+  }
+
+  Vec3D operator/(const float scalar) const {
+    return {x / scalar, y / scalar, z / scalar};
+  }
+
+  Vec3D cross(const Vec3D &other) const {
+    return {y * other.z - z * other.y, z * other.x - x * other.z,
+            x * other.y - y * other.x};
+  }
+
+  float dot(const Vec3D &other) const {
+    return x * other.x + y * other.y + z * other.z;
+  }
+
+  float length() const { return std::sqrt(x * x + y * y + z * z); }
+
+  Vec3D normalized() const {
+    float len = length();
+    if (len == 0.0f)
+      return {0, 0, 0};
+    return *this / len;
+  }
 };
 
 struct Px2D {
@@ -169,7 +227,7 @@ public:
       transformed_tri.push_back(transformed);
     }
 
-    // 2. painters algo
+    // 2. painters algo(slow)
     sort(transformed_tri.begin(), transformed_tri.end(),
          [](const Triangle &t1, const Triangle &t2) {
            float z1 = (t1.p[0].z + t1.p[1].z + t1.p[2].z) / 3.0f;
@@ -179,8 +237,10 @@ public:
 
     // 3. Render
     for (const auto &tri : transformed_tri) {
-      Fill_triangle(tri, col::GREEN, fov);
-      Draw_triangle(tri, col::BLACK, fov);
+      Color shaded =
+          Shade_triangle(tri, {1, -1, 1}, col::GREEN); // 2nd sector = -1 -1
+      Fill_triangle(tri, shaded, fov);
+      // Draw_triangle(tri, col::WHITE, fov);
     }
 
     Draw();
@@ -243,7 +303,8 @@ public:
 
   void DrawPoint(Vec3D point, Color color, float fovDegrees = 90.0f) {
     Px2D screenPos = screen(point, fovDegrees);
-    if (screenPos.x >= 0 && screenPos.y >= 0 && screenPos.x < screenW && screenPos.y < screenH) {
+    if (screenPos.x >= 0 && screenPos.y >= 0 && screenPos.x < screenW &&
+        screenPos.y < screenH) {
       screen_buffer[screenPos.y * screenW + screenPos.x] = color.to_hex();
     }
   }
@@ -376,7 +437,8 @@ public:
     } else if (p0.y == p1.y) {
       Fill_flat_top_triangle(p0, p1, p2, color);
     } else {
-      int p3_x = p0.x + (int)(((float)(p1.y - p0.y) / (float)(p2.y - p0.y)) * (float)(p2.x - p0.x));
+      int p3_x = p0.x + (int)(((float)(p1.y - p0.y) / (float)(p2.y - p0.y)) *
+                              (float)(p2.x - p0.x));
       Px2D p3 = {p3_x, p1.y};
       Fill_flat_bottom_triangle(p0, p1, p3, color);
       Fill_flat_top_triangle(p1, p3, p2, color);
@@ -396,10 +458,28 @@ public:
     float x_ndc = (point.x * f / aspect) * invZ; // normalize to aspect ratio
     float y_ndc = (point.y * f) * invZ;
 
-    int screenX = (int)((x_ndc + 1.0f) * 0.5f * screenW); // formula = (x+1)/(2*z*tan(fov/2))
+    int screenX = (int)((x_ndc + 1.0f) * 0.5f *
+                        screenW); // formula = (x+1)/(2*z*tan(fov/2))
     int screenY = (int)((1.0f - y_ndc) * 0.5f * screenH);
 
     return {screenX, screenY};
+  }
+
+  Color Shade_triangle(Triangle tri, Vec3D Light_v,
+                       Color color) { // flat shading
+    Vec3D v0 = tri.p[0];
+    Vec3D v1 = tri.p[1];
+    Vec3D v2 = tri.p[2];
+
+    Vec3D l1 = v0 - v1;
+    Vec3D l2 = v2 - v1;
+
+    Vec3D normal = l1.cross(l2);
+    normal = normal.normalized();
+    float light_intensity = normal.dot(Light_v.normalized());
+    light_intensity = clamp(light_intensity, 0.15f, 1.0f);
+
+    return color * light_intensity;
   }
 
 #pragma endregion
