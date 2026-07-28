@@ -148,6 +148,7 @@ public:
   float y_offset = 0.0f;
   float dy = 1.0f / 120.0f;
   float specularity = 0.1f;
+  float exposure = 1.0f;
   Vec3D light_dir = {1, -1, -1};
   Vec3D z_dir = {0, 0, 1};
   bool calculateNormals = true;
@@ -215,7 +216,17 @@ public:
       specularity -= 0.1f;
       SDL_Delay(200);
     }
-    specularity = clamp(specularity, 0.0f, 2.0f);
+    specularity = clamp(specularity, 0.0f, 10.0f);
+
+    if (keystate[SDL_SCANCODE_M]) {
+      exposure += 0.1f;
+      SDL_Delay(200);
+    }
+    if (keystate[SDL_SCANCODE_N]) {
+      exposure -= 0.1f;
+      SDL_Delay(200);
+    }
+    exposure = clamp(exposure, 0.0f, 10.0f);
 
     if (SDL_GetMouseState(&mousepos.x, &mousepos.y) &
         SDL_BUTTON(SDL_BUTTON_LEFT)) {
@@ -248,8 +259,9 @@ public:
     // 3. Render
     for (const auto &tri : transformed_tri) {
       if (!isTriangleCulled(tri, 0.1f, backface_cull)) {
-        Color shaded = Shade_triangle(tri, light, col::GREEN, calculateNormals,
-                                      specularity); // 2nd sector = -1 -1
+        Color shaded =
+            Shade_triangle(tri, light, col::GREEN, calculateNormals,
+                           specularity, exposure); // 2nd sector = -1 -1
         Fill_triangle(tri, shaded, fov);
       }
       // Draw_triangle(tri, col::WHITE, fov);
@@ -568,7 +580,8 @@ public:
   }
 
   Color Shade_triangle(Triangle tri, Vec3D Light_v, Color color,
-                       bool calculateNormals = true, float specularity = 0.8f) {
+                       bool calculateNormals = true, float specularity = 0.8f,
+                       float exposure = 1.0f) {
     Vec3D normal;
     Vec3D cam = {0, 0, 0};
     if (calculateNormals) {
@@ -591,7 +604,8 @@ public:
     Color spec = col::WHITE;
     spec = spec * specular;
 
-    return (color * light_intensity) + spec * specularity;
+    return ((color * light_intensity * std::log10(exposure * 10 + 1.0f)) +
+            spec * specularity * exposure); // some type of faked exposure ig
   }
 
   bool isTriangleCulled(Triangle tri, float cull_dist,

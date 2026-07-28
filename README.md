@@ -24,12 +24,17 @@ Instructions to Build and Run:
 2. Start run.bat
 
 Controls:
-Q/E : change FOV
-Arrow keys : rotate object
-W/S : move forward/backward
-Z/X : move up/down
-B : toggle backface culling
-C : toggle b/w calculating normals and using custom normals.
-2 : increase specularity
-1 : decrease specularity
-Left Click and Drag mouse : Move the light source.
+
+- Q/E : change FOV
+- Arrow keys : rotate object
+- W/S : move forward/backward
+- Z/X : move up/down
+- B : toggle backface culling
+- C : toggle b/w calculating normals and using custom normals.
+- 2 : increase specularity
+- 1 : decrease specularity
+- Left Click and Drag mouse : Move the light source.
+- M : increase exposure
+- N : decrease exposure
+- [main.cpp (Line 196)](main.cpp#L196)  `mesh = OBJLoader("Object/full_model.obj");` change it to any .obj model
+
