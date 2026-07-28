@@ -106,12 +106,14 @@ struct Px2D {
 
 struct Triangle {
   Vec3D p[3];
+  Vec3D n[3] = {};
   Color color = col::WHITE;
 };
 
 struct Mesh {
   std::vector<Vec3D> vertices;
   std::vector<Triangle> tris;
+  std::vector<Vec3D> vert_normals;
 };
 
 #pragma endregion
@@ -130,6 +132,8 @@ public:
   float y_offset = 0.0f;
   float dy = 1.0f / 120.0f;
   Vec3D light_dir = {1, -1, -1};
+  Vec3D z_dir = {0, 0, 1};
+  bool calculateNormals = true;
   Px2D mousepos;
 #pragma endregion
 
@@ -176,10 +180,16 @@ public:
     if (keystate[SDL_SCANCODE_X]) {
       y_offset -= dy;
     }
+
+    if (keystate[SDL_SCANCODE_C]) {
+      calculateNormals = !calculateNormals;
+      SDL_Delay(200);
+    }
+
     if (SDL_GetMouseState(&mousepos.x, &mousepos.y) &
         SDL_BUTTON(SDL_BUTTON_LEFT)) {
-      light_dir = {-(((float)mousepos.x / screenW) * 4.0f - 1.0f),
-                   (((float)mousepos.y / screenH) * 4.0f - 1.0f), 1};
+      light_dir = {-(((float)mousepos.x / screenW) * 4.0f - 2.0f) * z_dir.z,
+                   (((float)mousepos.y / screenH) * 4.0f - 2.0f), z_dir.z};
       light_dir = light_dir.normalized();
     }
 
@@ -189,6 +199,8 @@ public:
     vector<Triangle> transformed_tri;
     Vec3D light = {1, -1, -1};
     light = rotate_yz(rotate_xz(light_dir, angle), angle2);
+    z_dir = rotate_yz(rotate_xz({0, 0, 1}, angle), angle2);
+
     for (const auto &tri : mesh.tris) {
       Triangle transformed = translate_y_triangle(
           translate_z_triangle(
@@ -209,8 +221,8 @@ public:
     // 3. Render
     for (const auto &tri : transformed_tri) {
       if (!isTriangleCulled(tri, 0.1f)) {
-        Color shaded =
-            Shade_triangle(tri, light_dir, col::GREEN); // 2nd sector = -1 -1
+        Color shaded = Shade_triangle(tri, light, col::GREEN,
+                                      calculateNormals); // 2nd sector = -1 -1
         Fill_triangle(tri, shaded, fov);
       }
       // Draw_triangle(tri, col::WHITE, fov);
@@ -242,21 +254,39 @@ public:
         mesh.vertices.push_back({x, y, z});
       } else if (type == "f") {
         vector<int> face_v;
+        vector<int> face_vn;
         string token;
         while (ss >> token) {
-          stringstream token_ss(token);
-          int v_idx;
-          token_ss >> v_idx;
-          face_v.push_back(v_idx - 1);
+          int v_idx = 0, vt_idx = 0, vn_idx = 0;
+          if (token.find("//") != string::npos) {
+            sscanf(token.c_str(), "%d//%d", &v_idx, &vn_idx);
+          } else {
+            sscanf(token.c_str(), "%d/%d/%d", &v_idx, &vt_idx, &vn_idx);
+          }
+          if (v_idx > 0)
+            face_v.push_back(v_idx - 1);
+          if (vn_idx > 0)
+            face_vn.push_back(vn_idx - 1);
         }
         for (size_t i = 1; i + 1 < face_v.size(); ++i) {
           Triangle tri;
           tri.p[0] = mesh.vertices[face_v[0]];
           tri.p[1] = mesh.vertices[face_v[i]];
           tri.p[2] = mesh.vertices[face_v[i + 1]];
+
+          if (face_vn.size() == face_v.size() && !mesh.vert_normals.empty()) {
+            tri.n[0] = mesh.vert_normals[face_vn[0]];
+            tri.n[1] = mesh.vert_normals[face_vn[i]];
+            tri.n[2] = mesh.vert_normals[face_vn[i + 1]];
+          }
+
           tri.color = col::RANDOM();
           mesh.tris.push_back(tri);
         }
+      } else if (type == "vn") {
+        float x, y, z;
+        ss >> x >> y >> z;
+        mesh.vert_normals.push_back({x, y, z});
       }
     }
     return mesh;
@@ -270,6 +300,7 @@ public:
     for (int i = 0; i < 3; ++i) {
       translatedTriangle.p[i] = triangle.p[i];
       translatedTriangle.p[i].z += z_offset;
+      translatedTriangle.n[i] = triangle.n[i];
     }
     return translatedTriangle;
   }
@@ -279,6 +310,7 @@ public:
     for (int i = 0; i < 3; ++i) {
       translatedTriangle.p[i] = triangle.p[i];
       translatedTriangle.p[i].y += y_offset;
+      translatedTriangle.n[i] = triangle.n[i];
     }
     return translatedTriangle;
   }
@@ -288,6 +320,7 @@ public:
     rotatedTriangle.color = triangle.color;
     for (int i = 0; i < 3; ++i) {
       rotatedTriangle.p[i] = rotate_xz(triangle.p[i], angle);
+      rotatedTriangle.n[i] = rotate_xz(triangle.n[i], angle);
     }
     return rotatedTriangle;
   }
@@ -296,6 +329,7 @@ public:
     rotatedTriangle.color = triangle.color;
     for (int i = 0; i < 3; ++i) {
       rotatedTriangle.p[i] = rotate_yz(triangle.p[i], angle);
+      rotatedTriangle.n[i] = rotate_yz(triangle.n[i], angle);
     }
     return rotatedTriangle;
   }
@@ -481,17 +515,23 @@ public:
     return {screenX, screenY};
   }
 
-  Color Shade_triangle(Triangle tri, Vec3D Light_v,
-                       Color color) { // flat shading
-    Vec3D v0 = tri.p[0];
-    Vec3D v1 = tri.p[1];
-    Vec3D v2 = tri.p[2];
+  Color Shade_triangle(Triangle tri, Vec3D Light_v, Color color,
+                       bool calculateNormals = true) {
+    Vec3D normal;
+    Vec3D cam = {0, 0, 0};
+    if (calculateNormals) {
+      Vec3D v0 = tri.p[0];
+      Vec3D v1 = tri.p[1];
+      Vec3D v2 = tri.p[2];
 
-    Vec3D l1 = v0 - v1;
-    Vec3D l2 = v2 - v1;
+      Vec3D l1 = v0 - v1;
+      Vec3D l2 = v2 - v1;
 
-    Vec3D normal = l1.cross(l2);
-    normal = normal.normalized();
+      normal = l1.cross(l2).normalized();
+    } else {
+      normal = cam - ((tri.n[0] + tri.n[1] + tri.n[2]).normalized());
+    }
+
     float light_intensity = normal.dot(Light_v.normalized());
     light_intensity = clamp(light_intensity, 0.15f, 1.0f);
 
