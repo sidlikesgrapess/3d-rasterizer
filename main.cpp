@@ -56,6 +56,12 @@ namespace col {
 const Color BLACK = {0, 0, 0, 255};
 const Color WHITE = {255, 255, 255, 255};
 const Color GREEN = {0, 255, 0, 255};
+const Color RED = {255, 0, 0, 255};
+const Color BLUE = {0, 0, 255, 255};
+const Color YELLOW = {255, 255, 0, 255};
+const Color CYAN = {0, 255, 255, 255};
+const Color MAGENTA = {255, 0, 255, 255};
+const Color GREY = {128, 128, 128, 255};
 inline Color RANDOM() {
   return {static_cast<Uint8>(rand() % 256), static_cast<Uint8>(rand() % 256),
           static_cast<Uint8>(rand() % 256), 255};
@@ -149,7 +155,7 @@ public:
 
   bool OnUserUpdate(float fElapsedTime) {
     keystate = SDL_GetKeyboardState(nullptr);
-    Clear(col::BLACK);
+    Clear(col::GREY);
 #pragma region Keyboard input
     if (keystate[SDL_SCANCODE_Q]) {
       fov += 0.5f;
