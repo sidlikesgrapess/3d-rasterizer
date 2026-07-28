@@ -13,8 +13,8 @@
 
 using namespace std;
 
-const int screenW = 600;
-const int screenH = 600;
+const int screenW = 1920;
+const int screenH = 1080;
 SDL_Renderer *renderer = nullptr;
 SDL_Texture *frameTexture = nullptr;
 
@@ -138,6 +138,7 @@ public:
   Vec3D light_dir = {1, -1, -1};
   Vec3D z_dir = {0, 0, 1};
   bool calculateNormals = true;
+  bool backface_cull = true;
   Px2D mousepos;
 #pragma endregion
 
@@ -189,6 +190,10 @@ public:
       calculateNormals = !calculateNormals;
       SDL_Delay(200);
     }
+    if (keystate[SDL_SCANCODE_B]) {
+      backface_cull = !backface_cull;
+      SDL_Delay(200);
+    }
 
     if (SDL_GetMouseState(&mousepos.x, &mousepos.y) &
         SDL_BUTTON(SDL_BUTTON_LEFT)) {
@@ -220,7 +225,7 @@ public:
 
     // 3. Render
     for (const auto &tri : transformed_tri) {
-      if (!isTriangleCulled(tri, 0.1f)) {
+      if (!isTriangleCulled(tri, 0.1f, backface_cull)) {
         Color shaded = Shade_triangle(tri, light, col::GREEN,
                                       calculateNormals); // 2nd sector = -1 -1
         Fill_triangle(tri, shaded, fov);
@@ -397,9 +402,8 @@ public:
     }
   }
 
-  void
-  DrawHorizontalLine(int x1, int x2, int y, float z1, float z2,
-                     Color color) { // rasterize horizontal scanline with z-test
+  void DrawHorizontalLine(int x1, int x2, int y, float z1, float z2,
+                          Color color) { // horizontal scanline with z
     if (y < 0 || y >= screenH)
       return;
     if (x1 > x2) {
@@ -410,18 +414,19 @@ public:
     int origX1 = x1;
     int origX2 = x2;
 
-    int startX = std::max(0, x1);
-    int endX = std::min(screenW - 1, x2);
+    int startX = std::max(0, x1);         // outside screen
+    int endX = std::min(screenW - 1, x2); // outside screen
 
     uint32_t hexColor = color.to_hex();
     int rowOffset = y * screenW;
     float dx = (float)(origX2 - origX1);
 
     for (int x = startX; x <= endX; ++x) {
-      float t = (dx != 0.0f) ? (float)(x - origX1) / dx : 0.0f; // fuck this
+      float t =
+          (dx != 0.0f) ? (float)(x - origX1) / dx : 0.0f; // fuck this % line
       float z_current = z1 + t * (z2 - z1);
-      int index = rowOffset + x;
 
+      int index = rowOffset + x;
       if (z_current < z_buffer[index]) {
         z_buffer[index] = z_current;
         screen_buffer[index] = hexColor;
@@ -563,11 +568,14 @@ public:
     return color * light_intensity;
   }
 
-  bool isTriangleCulled(Triangle tri, float cull_dist) {
+  bool isTriangleCulled(Triangle tri, float cull_dist,
+                        bool backface_cull = true) {
     if (tri.p[0].z < cull_dist || tri.p[1].z < cull_dist ||
         tri.p[2].z < cull_dist) {
       return true;
     }
+    if (!backface_cull)
+      return false;
     Vec3D v0 = tri.p[0];
     Vec3D v1 = tri.p[1];
     Vec3D v2 = tri.p[2];
