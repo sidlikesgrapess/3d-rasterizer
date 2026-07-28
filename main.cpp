@@ -10,8 +10,8 @@
 
 using namespace std;
 
-const int screenW = 1024;
-const int screenH = 1024;
+const int screenW = 600;
+const int screenH = 600;
 SDL_Renderer *renderer = nullptr;
 vector<uint32_t>
 screen_buffer(screenW *screenH); // y *screenW+x = index of pixel
@@ -41,8 +41,8 @@ struct Vec3D {
   float x, y, z;
 };
 
-struct Vec2D {
-  float x, y;
+struct Px2D {
+  int x, y;
 };
 
 struct Triangle {
@@ -113,7 +113,7 @@ public:
 #pragma endregion
 
   bool OnUserCreate() {
-    cube = OBJLoader("Object/monkey.obj");
+    cube = OBJLoader("Object/full_model.obj");
     return true;
   }
 
@@ -190,7 +190,7 @@ public:
   }
 
 #pragma region helper functions
-
+  // ALL TRANSFORM FUNCTIONS
   Triangle translate_z_triangle(const Triangle &triangle, float z_offset) {
     Triangle translatedTriangle;
     translatedTriangle.color = triangle.color;
@@ -227,15 +227,28 @@ public:
     return rotatedTriangle;
   }
 
+  Vec3D rotate_xz(Vec3D point, float angle) {
+    float cosA = cos(angle);
+    float sinA = sin(angle);
+    return {point.x * cosA - point.z * sinA, point.y,
+            point.x * sinA + point.z * cosA};
+  }
+
+  Vec3D rotate_yz(Vec3D point, float angle) {
+    float cosA = cos(angle);
+    float sinA = sin(angle);
+    return {point.x, point.y * cosA - point.z * sinA,
+            point.y * sinA + point.z * cosA};
+  }
+
   void DrawPoint(Vec3D point, Color color, float fovDegrees = 90.0f) {
-    Vec2D screenPos = screen(point, fovDegrees);
-    int x = (int)screenPos.x;
-    int y = (int)screenPos.y;
-    if (x >= 0 && y >= 0 && x < screenW && y < screenH) {
-      screen_buffer[y * screenW + x] = color.to_hex();
+    Px2D screenPos = screen(point, fovDegrees);
+    if (screenPos.x >= 0 && screenPos.y >= 0 && screenPos.x < screenW && screenPos.y < screenH) {
+      screen_buffer[screenPos.y * screenW + screenPos.x] = color.to_hex();
     }
   }
 
+  // ALL DRAW FUNCTIONS
   void Draw() { // once per frame
     SDL_UpdateTexture(frameTexture, nullptr, screen_buffer.data(),
                       screenW * sizeof(uint32_t));
@@ -299,54 +312,54 @@ public:
 
   void Draw_triangle(const Triangle &tri, Color color,
                      float fovDegrees = 90.0f) {
-    Vec2D p0 = screen(tri.p[0], fovDegrees);
-    Vec2D p1 = screen(tri.p[1], fovDegrees);
-    Vec2D p2 = screen(tri.p[2], fovDegrees);
+    Px2D p0 = screen(tri.p[0], fovDegrees);
+    Px2D p1 = screen(tri.p[1], fovDegrees);
+    Px2D p2 = screen(tri.p[2], fovDegrees);
 
     DrawLine(p0.x, p0.y, p1.x, p1.y, color);
     DrawLine(p1.x, p1.y, p2.x, p2.y, color);
     DrawLine(p2.x, p2.y, p0.x, p0.y, color);
   }
 
-  void Fill_flat_bottom_triangle(Vec2D p0, Vec2D p1, Vec2D p2, Color color) {
+  void Fill_flat_bottom_triangle(Px2D p0, Px2D p1, Px2D p2, Color color) {
     if (p1.y == p0.y)
       return;
-    float invslope1 = (p1.x - p0.x) / (p1.y - p0.y);
-    float invslope2 = (p2.x - p0.x) / (p2.y - p0.y);
+    float invslope1 = (float)(p1.x - p0.x) / (float)(p1.y - p0.y);
+    float invslope2 = (float)(p2.x - p0.x) / (float)(p2.y - p0.y);
 
-    int startY = (int)ceil(p0.y);
-    int endY = (int)floor(p1.y);
+    int startY = p0.y;
+    int endY = p1.y;
 
     for (int y = startY; y <= endY; y++) {
-      float dy = (float)y - p0.y;
-      float x1 = p0.x + dy * invslope1;
-      float x2 = p0.x + dy * invslope2;
-      DrawHorizontalLine((int)x1, (int)x2, (int)y, color);
+      float dy = (float)(y - p0.y);
+      float x1 = (float)p0.x + dy * invslope1;
+      float x2 = (float)p0.x + dy * invslope2;
+      DrawHorizontalLine((int)x1, (int)x2, y, color);
     }
   }
 
-  void Fill_flat_top_triangle(Vec2D p0, Vec2D p1, Vec2D p2, Color color) {
+  void Fill_flat_top_triangle(Px2D p0, Px2D p1, Px2D p2, Color color) {
     if (p2.y == p0.y)
       return;
-    float invslope1 = (p2.x - p0.x) / (p2.y - p0.y); // slope
-    float invslope2 = (p2.x - p1.x) / (p2.y - p1.y);
+    float invslope1 = (float)(p2.x - p0.x) / (float)(p2.y - p0.y); // slope
+    float invslope2 = (float)(p2.x - p1.x) / (float)(p2.y - p1.y);
 
-    int startY = (int)ceil(p0.y);
-    int endY = (int)floor(p2.y);
+    int startY = p0.y;
+    int endY = p2.y;
 
     for (int y = startY; y <= endY; y++) {
-      float dy = (float)y - p2.y;
-      float x1 = p2.x + dy * invslope1; // eqn of line along slope
-      float x2 = p2.x + dy * invslope2;
-      DrawHorizontalLine((int)x1, (int)x2, (int)y, color);
+      float dy = (float)(y - p2.y);
+      float x1 = (float)p2.x + dy * invslope1; // eqn of line along slope
+      float x2 = (float)p2.x + dy * invslope2;
+      DrawHorizontalLine((int)x1, (int)x2, y, color);
     }
   }
 
   void Fill_triangle(const Triangle &tri, Color color,
                      float fovDegrees = 90.0f) {
-    Vec2D p0 = screen(tri.p[0], fovDegrees);
-    Vec2D p1 = screen(tri.p[1], fovDegrees);
-    Vec2D p2 = screen(tri.p[2], fovDegrees);
+    Px2D p0 = screen(tri.p[0], fovDegrees);
+    Px2D p1 = screen(tri.p[1], fovDegrees);
+    Px2D p2 = screen(tri.p[2], fovDegrees);
 
     if (p0.y > p1.y)
       std::swap(p0, p1);
@@ -355,34 +368,22 @@ public:
     if (p1.y > p2.y)
       std::swap(p1, p2);
 
-    if ((int)p0.y == (int)p2.y)
+    if (p0.y == p2.y)
       return;
 
-    if ((int)p1.y == (int)p2.y) {
+    if (p1.y == p2.y) {
       Fill_flat_bottom_triangle(p0, p1, p2, color);
-    } else if ((int)p0.y == (int)p1.y) {
+    } else if (p0.y == p1.y) {
       Fill_flat_top_triangle(p0, p1, p2, color);
     } else {
-      Vec2D p3 = {p0.x + ((p1.y - p0.y) / (p2.y - p0.y)) * (p2.x - p0.x), p1.y};
+      int p3_x = p0.x + (int)(((float)(p1.y - p0.y) / (float)(p2.y - p0.y)) * (float)(p2.x - p0.x));
+      Px2D p3 = {p3_x, p1.y};
       Fill_flat_bottom_triangle(p0, p1, p3, color);
       Fill_flat_top_triangle(p1, p3, p2, color);
     }
   }
-
-  Vec3D rotate_xz(Vec3D point, float angle) {
-    float cosA = cos(angle);
-    float sinA = sin(angle);
-    return {point.x * cosA - point.z * sinA, point.y,
-            point.x * sinA + point.z * cosA};
-  }
-  Vec3D rotate_yz(Vec3D point, float angle) {
-    float cosA = cos(angle);
-    float sinA = sin(angle);
-    return {point.x, point.y * cosA - point.z * sinA,
-            point.y * sinA + point.z * cosA};
-  }
-
-  Vec2D screen(Vec3D point, float fovDegrees = 90.0f) {
+  // PROJECTION AND SHADING MATH
+  Px2D screen(Vec3D point, float fovDegrees = 90.0f) {
     float fovRad = fovDegrees * 0.5f * (3.14159265f / 180.0f);
     float f = 1.0f / tan(fovRad);
     float aspect = (float)screenW / (float)screenH;
@@ -395,14 +396,13 @@ public:
     float x_ndc = (point.x * f / aspect) * invZ; // normalize to aspect ratio
     float y_ndc = (point.y * f) * invZ;
 
-    float screenX =
-        (x_ndc + 1.0f) * 0.5f * screenW; // formula = (x+1)/(2*z*tan(fov/2))
-    float screenY = (1.0f - y_ndc) * 0.5f * screenH;
-
-#pragma endregion
+    int screenX = (int)((x_ndc + 1.0f) * 0.5f * screenW); // formula = (x+1)/(2*z*tan(fov/2))
+    int screenY = (int)((1.0f - y_ndc) * 0.5f * screenH);
 
     return {screenX, screenY};
   }
+
+#pragma endregion
 };
 
 int main() {
@@ -410,11 +410,12 @@ int main() {
   srand(time(NULL)); // for making colors not random every frame
 
   SDL_Init(SDL_INIT_VIDEO);
-  SDL_Window *window =
-      SDL_CreateWindow("3D Rasterizer", SDL_WINDOWPOS_CENTERED,
-                       SDL_WINDOWPOS_CENTERED, screenW, screenH, 0);
+  SDL_Window *window = SDL_CreateWindow("3D Rasterizer", SDL_WINDOWPOS_CENTERED,
+                                        SDL_WINDOWPOS_CENTERED, screenW,
+                                        screenH, SDL_WINDOW_ALLOW_HIGHDPI);
   renderer = SDL_CreateRenderer(
       window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+  SDL_RenderSetLogicalSize(renderer, screenW, screenH);
   frameTexture =
       SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
                         SDL_TEXTUREACCESS_STREAMING, screenW, screenH);
