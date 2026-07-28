@@ -44,6 +44,12 @@ struct Color {
             static_cast<Uint8>((b * scalar) > 255 ? 255 : b * scalar),
             static_cast<Uint8>((a * scalar) > 255 ? 255 : a * scalar)};
   }
+  Color operator*(const Color other) const {
+    return {static_cast<Uint8>((r * other.r) > 255 ? 255 : r * other.r),
+            static_cast<Uint8>((g * other.g) > 255 ? 255 : g * other.g),
+            static_cast<Uint8>((b * other.b) > 255 ? 255 : b * other.b),
+            static_cast<Uint8>((a * other.a) > 255 ? 255 : a * other.a)};
+  }
   Color operator/(const float scalar) const {
     return {static_cast<Uint8>(r / scalar > 255 ? 255 : r / scalar),
             static_cast<Uint8>(g / scalar > 255 ? 255 : g / scalar),
@@ -141,6 +147,7 @@ public:
   float fov = 90.0f;
   float y_offset = 0.0f;
   float dy = 1.0f / 120.0f;
+  float specularity = 0.1f;
   Vec3D light_dir = {1, -1, -1};
   Vec3D z_dir = {0, 0, 1};
   bool calculateNormals = true;
@@ -200,6 +207,15 @@ public:
       backface_cull = !backface_cull;
       SDL_Delay(200);
     }
+    if (keystate[SDL_SCANCODE_2]) {
+      specularity += 0.1f;
+      SDL_Delay(200);
+    }
+    if (keystate[SDL_SCANCODE_1]) {
+      specularity -= 0.1f;
+      SDL_Delay(200);
+    }
+    specularity = clamp(specularity, 0.0f, 2.0f);
 
     if (SDL_GetMouseState(&mousepos.x, &mousepos.y) &
         SDL_BUTTON(SDL_BUTTON_LEFT)) {
@@ -232,8 +248,8 @@ public:
     // 3. Render
     for (const auto &tri : transformed_tri) {
       if (!isTriangleCulled(tri, 0.1f, backface_cull)) {
-        Color shaded = Shade_triangle(tri, light, col::GREEN,
-                                      calculateNormals); // 2nd sector = -1 -1
+        Color shaded = Shade_triangle(tri, light, col::GREEN, calculateNormals,
+                                      specularity); // 2nd sector = -1 -1
         Fill_triangle(tri, shaded, fov);
       }
       // Draw_triangle(tri, col::WHITE, fov);
@@ -552,7 +568,7 @@ public:
   }
 
   Color Shade_triangle(Triangle tri, Vec3D Light_v, Color color,
-                       bool calculateNormals = true) {
+                       bool calculateNormals = true, float specularity = 0.8f) {
     Vec3D normal;
     Vec3D cam = {0, 0, 0};
     if (calculateNormals) {
@@ -571,7 +587,11 @@ public:
     float light_intensity = normal.dot(Light_v.normalized());
     light_intensity = clamp(light_intensity, 0.15f, 1.0f);
 
-    return color * light_intensity;
+    float specular = pow(light_intensity, 8);
+    Color spec = col::WHITE;
+    spec = spec * specular;
+
+    return (color * light_intensity) + spec * specularity;
   }
 
   bool isTriangleCulled(Triangle tri, float cull_dist,
