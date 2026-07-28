@@ -1,5 +1,7 @@
 #include "headers/SDL2/SDL_mouse.h"
 #include "headers/SDL2/SDL_scancode.h"
+#include <cfloat>
+#include <cstdint>
 #define SDL_MAIN_HANDLED
 #include "headers/SDL2/SDL.h"
 #include <algorithm>
@@ -14,8 +16,6 @@ using namespace std;
 const int screenW = 600;
 const int screenH = 600;
 SDL_Renderer *renderer = nullptr;
-vector<uint32_t>
-screen_buffer(screenW *screenH); // y *screenW+x = index of pixel
 SDL_Texture *frameTexture = nullptr;
 
 #pragma region structures
@@ -102,6 +102,7 @@ struct Vec3D {
 
 struct Px2D {
   int x, y;
+  float z;
 };
 
 struct Triangle {
@@ -122,6 +123,9 @@ class Engine3D {
 public:
   Engine3D() {}
 #pragma region vars
+  vector<uint32_t> screen_buffer =
+      vector<uint32_t>(screenW * screenH); // y *screenW+x = index of pixel
+  vector<float> z_buffer = vector<float>(screenW * screenH, FLT_MAX);
   const Uint8 *keystate = nullptr;
   Mesh mesh;
   float dz = 1.0f / 120.0f;
@@ -201,6 +205,7 @@ public:
     light = rotate_yz(rotate_xz(light_dir, angle), angle2);
     z_dir = rotate_yz(rotate_xz({0, 0, 1}, angle), angle2);
 
+    // 1. Transform mesh
     for (const auto &tri : mesh.tris) {
       Triangle transformed = translate_y_triangle(
           translate_z_triangle(
@@ -211,12 +216,7 @@ public:
     }
 
     // 2. painters algo(slow)
-    sort(transformed_tri.begin(), transformed_tri.end(),
-         [](const Triangle &t1, const Triangle &t2) {
-           float z1 = (t1.p[0].z + t1.p[1].z + t1.p[2].z) / 3.0f;
-           float z2 = (t2.p[0].z + t2.p[1].z + t2.p[2].z) / 3.0f;
-           return z1 > z2; // furthest Z rendered first, closest Z rendered last
-         });
+    // Painters_algo(transformed_tri);
 
     // 3. Render
     for (const auto &tri : transformed_tri) {
@@ -397,26 +397,41 @@ public:
     }
   }
 
-  void DrawHorizontalLine(int x1, int x2, int y,
-                          Color color) { // faster for flat triangles
+  void
+  DrawHorizontalLine(int x1, int x2, int y, float z1, float z2,
+                     Color color) { // rasterize horizontal scanline with z-test
     if (y < 0 || y >= screenH)
       return;
-    if (x1 > x2)
+    if (x1 > x2) {
       std::swap(x1, x2);
+      std::swap(z1, z2);
+    }
 
-    x1 = std::max(0, x1);
-    x2 = std::min(screenW - 1, x2);
+    int origX1 = x1;
+    int origX2 = x2;
+
+    int startX = std::max(0, x1);
+    int endX = std::min(screenW - 1, x2);
 
     uint32_t hexColor = color.to_hex();
     int rowOffset = y * screenW;
+    float dx = (float)(origX2 - origX1);
 
-    for (int x = x1; x <= x2; ++x) {
-      screen_buffer[rowOffset + x] = hexColor;
+    for (int x = startX; x <= endX; ++x) {
+      float t = (dx != 0.0f) ? (float)(x - origX1) / dx : 0.0f; // fuck this
+      float z_current = z1 + t * (z2 - z1);
+      int index = rowOffset + x;
+
+      if (z_current < z_buffer[index]) {
+        z_buffer[index] = z_current;
+        screen_buffer[index] = hexColor;
+      }
     }
   }
 
   void Clear(Color color) {
     std::fill(screen_buffer.begin(), screen_buffer.end(), color.to_hex());
+    std::fill(z_buffer.begin(), z_buffer.end(), FLT_MAX);
   }
 
   void Draw_triangle(const Triangle &tri, Color color,
@@ -438,12 +453,16 @@ public:
 
     int startY = p0.y;
     int endY = p1.y;
+    float totalDy = (float)(p1.y - p0.y);
 
     for (int y = startY; y <= endY; y++) {
       float dy = (float)(y - p0.y);
+      float t = (totalDy != 0.0f) ? dy / totalDy : 0.0f; // fuck this too
       float x1 = (float)p0.x + dy * invslope1;
       float x2 = (float)p0.x + dy * invslope2;
-      DrawHorizontalLine((int)x1, (int)x2, y, color);
+      float z1 = p0.z + t * (p1.z - p0.z);
+      float z2 = p0.z + t * (p2.z - p0.z);
+      DrawHorizontalLine((int)x1, (int)x2, y, z1, z2, color);
     }
   }
 
@@ -455,12 +474,17 @@ public:
 
     int startY = p0.y;
     int endY = p2.y;
+    float totalDy = (float)(p2.y - p0.y);
 
     for (int y = startY; y <= endY; y++) {
       float dy = (float)(y - p2.y);
+      float t =
+          (totalDy != 0.0f) ? (float)(y - p0.y) / totalDy : 0.0f; // fuck this
       float x1 = (float)p2.x + dy * invslope1; // eqn of line along slope
       float x2 = (float)p2.x + dy * invslope2;
-      DrawHorizontalLine((int)x1, (int)x2, y, color);
+      float z1 = p0.z + t * (p2.z - p0.z);
+      float z2 = p1.z + t * (p2.z - p1.z);
+      DrawHorizontalLine((int)x1, (int)x2, y, z1, z2, color);
     }
   }
 
@@ -485,9 +509,10 @@ public:
     } else if (p0.y == p1.y) {
       Fill_flat_top_triangle(p0, p1, p2, color);
     } else {
-      int p3_x = p0.x + (int)(((float)(p1.y - p0.y) / (float)(p2.y - p0.y)) *
-                              (float)(p2.x - p0.x));
-      Px2D p3 = {p3_x, p1.y};
+      float t = (float)(p1.y - p0.y) / (float)(p2.y - p0.y);
+      int p3_x = p0.x + (int)(t * (float)(p2.x - p0.x));
+      float p3_z = p0.z + t * (p2.z - p0.z);
+      Px2D p3 = {p3_x, p1.y, p3_z};
       Fill_flat_bottom_triangle(p0, p1, p3, color);
       Fill_flat_top_triangle(p1, p3, p2, color);
     }
@@ -512,7 +537,7 @@ public:
                         screenW); // formula = (x+1)/(2*z*tan(fov/2))
     int screenY = (int)((1.0f - y_ndc) * 0.5f * screenH);
 
-    return {screenX, screenY};
+    return {screenX, screenY, z};
   }
 
   Color Shade_triangle(Triangle tri, Vec3D Light_v, Color color,
@@ -554,6 +579,15 @@ public:
     normal = normal.normalized();
     float angle = normal.dot(cam - v1);
     return (angle > 0.0f) ? true : false;
+  }
+
+  void Painters_algo(vector<Triangle> &transformed_tri) {
+    sort(transformed_tri.begin(), transformed_tri.end(),
+         [](const Triangle &t1, const Triangle &t2) {
+           float z1 = (t1.p[0].z + t1.p[1].z + t1.p[2].z) / 3.0f;
+           float z2 = (t2.p[0].z + t2.p[1].z + t2.p[2].z) / 3.0f;
+           return z1 > z2; // furthest Z rendered first, closest Z rendered last
+         });
   }
 
 #pragma endregion
