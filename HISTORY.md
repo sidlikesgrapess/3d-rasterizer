@@ -139,3 +139,9 @@ Logic and structural changes since commit `e313d3b` ("deleted").
     - Menu: added a "textures" checkbox.
     - `OnUserCreate` now loads `Object/full_model.obj`. The `bmw.obj` line is kept, commented out.
     - Loading takes about 0.7 s (three 2048×2048 textures). Rendering takes about 11–18 ms per frame, depending on mode.
+
+23. **AI:** Updated `README.md` to match the current code, keeping its original style.
+    - Updated the library list, the functions list, the WIP list, the controls (now the menu), and the model path link (now `src/Engine3D.h`).
+    - Changed the AI note to say that AI also wrote parts of the code, pointing to `HISTORY.md`.
+
+24. **User:** Asked to remove the AI line from `README.md`. **AI:** Removed it. The boilerplate sentence stays.
