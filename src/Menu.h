@@ -73,6 +73,7 @@ struct Menu {
     ImGui::RadioButton("phong", &engine.shading, SHADING_PHONG);
     ImGui::Checkbox("calculate normals (flat only)", &engine.calculateNormals);
     ImGui::Checkbox("backface cull", &engine.backface_cull);
+    ImGui::Checkbox("textures", &engine.use_textures);
     ImGui::SliderFloat("render scale", &engine.render_scale, 0.25f, 1.0f);
     ImGui::DragFloat("specularity", &engine.specularity, 0.01f, 0.0f, 10.0f);
     ImGui::DragFloat("exposure", &engine.exposure, 0.01f, 0.0f, 10.0f);

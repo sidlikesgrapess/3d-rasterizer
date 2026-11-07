@@ -12,13 +12,15 @@
 // The 3 shading modes picked in the menu
 enum ShadingMode { SHADING_FLAT, SHADING_GOURAUD, SHADING_PHONG };
 
-// Lighting for ONE normal. Flat calls it once per triangle, Gouraud once per
-// vertex, Phong once per pixel.
-inline Color Shade_normal(Vec3D normal, Vec3D Light_v, Color color,
-                          float specularity, float exposure) {
+// How much light hits a surface with this normal (0.15 .. 1)
+inline float Light_intensity(Vec3D normal, Vec3D Light_v) {
   float light_intensity = normal.dot(Light_v.normalized());
-  light_intensity = std::clamp(light_intensity, 0.15f, 1.0f);
+  return std::clamp(light_intensity, 0.15f, 1.0f);
+}
 
+// Final color from the light amount + the surface color (green or texture)
+inline Color Shade_intensity(float light_intensity, Color color,
+                             float specularity, float exposure) {
   // x^8 as 3 multiplies instead of pow()
   float li2 = light_intensity * light_intensity;
   float li4 = li2 * li2;
@@ -36,6 +38,15 @@ inline Color Shade_normal(Vec3D normal, Vec3D Light_v, Color color,
 
   return ((color * light_intensity * exposure_scale) +
           spec * specularity * exposure); // some type of faked exposure ig
+}
+
+// Lighting for ONE normal. Flat calls it once per triangle, Phong once per
+// pixel. (Gouraud lights the corners with Light_intensity, blends that, then
+// calls Shade_intensity per pixel.)
+inline Color Shade_normal(Vec3D normal, Vec3D Light_v, Color color,
+                          float specularity, float exposure) {
+  return Shade_intensity(Light_intensity(normal, Light_v), color, specularity,
+                         exposure);
 }
 
 // Face normal from the triangle's corners

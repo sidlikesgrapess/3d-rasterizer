@@ -73,7 +73,9 @@ inline Mat4 rotation_xy(float angle) {
 inline Triangle transform_triangle(const Triangle &tri, const Mat4 &mat) {
   Triangle out;
   out.color = tri.color;
+  out.texture = tri.texture;
   for (int i = 0; i < 3; ++i) {
+    out.uv[i] = tri.uv[i];
     out.p[i] = mat.transform_point(tri.p[i]);
     out.n[i] = mat.transform_dir(tri.n[i]);
   }

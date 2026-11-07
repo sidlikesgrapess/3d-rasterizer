@@ -114,3 +114,28 @@ Logic and structural changes since commit `e313d3b` ("deleted").
       - Added a "render scale" slider (0.25 to 1) to the menu. The light circle's radius scales with it.
     - Flat output is unchanged (pixel-identical). Gouraud differs by tiny rounding in the blend weights.
     - Speed, same CPU state: Gouraud default 199 → 111 ms, Phong default 172 → 136 ms, Phong close-up 644 → 443 ms. Render scale 0.5 roughly halves the time again.
+
+20. **User:** Copied the `full_model` textures into `Object/Textures/`.
+
+21. **AI:** Changed the `map_Kd` texture paths in `Object/full_model.mtl` from absolute `Downloads` paths to `Textures/...`, relative to the `.mtl`.
+
+22. **AI:** Added texture mapping.
+    - Added `stb_image.h` v2.30 in `headers/stb/`, pinned to commit `adc1672` (Feb 2025), for loading PNGs. Its implementation is compiled once at the end of `main.cpp`'s includes.
+    - Added `src/Texture.h`: a `Texture` struct with nearest-pixel `sample(u, v)`, which wraps outside 0–1 and flips v, plus `load_texture()`.
+    - `Mesh.h`:
+      - Added a `UV` struct.
+      - `Triangle` gained `uv[3]` and `texture`, an index into the new `Mesh::textures`.
+      - `transform_triangle` copies both.
+    - `ObjLoader.h`:
+      - Parses `vt`, `mtllib` and `usemtl`, and the vt index in faces.
+      - The new `load_mtl()` reads `newmtl` and `map_Kd`, and loads each image once. Paths are relative to the `.mtl`.
+    - `Shading.h`: split `Shade_normal` into `Light_intensity()` and `Shade_intensity()`. The output is unchanged.
+    - Texture use by mode:
+      - Flat uses the texture color at the triangle's center.
+      - Phong uses the texture per pixel.
+      - Gouraud now blends the corner light amounts (`corner_light`) instead of the corner colors, then shades each pixel with the texture.
+      - Untextured Gouraud on the car changed slightly: mean difference about 1/255, but up to 81/255 on some highlights.
+    - Texture coordinates are perspective-corrected: weights are divided by corner depth, then renormalized.
+    - Menu: added a "textures" checkbox.
+    - `OnUserCreate` now loads `Object/full_model.obj`. The `bmw.obj` line is kept, commented out.
+    - Loading takes about 0.7 s (three 2048×2048 textures). Rendering takes about 11–18 ms per frame, depending on mode.

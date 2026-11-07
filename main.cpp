@@ -6,6 +6,11 @@
 #include <ctime>
 #include <string>
 
+// stb_image's code is compiled here, exactly once (src/Texture.h uses it).
+// Must come AFTER the other includes, so it isn't pulled in twice.
+#define STB_IMAGE_IMPLEMENTATION
+#include "headers/stb/stb_image.h"
+
 int main() {
 
   srand(time(NULL)); // for making colors not random every frame

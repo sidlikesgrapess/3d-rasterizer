@@ -27,7 +27,7 @@ public:
   Mesh mesh;
   std::vector<Triangle> transformed_tri; // kept between frames (no realloc)
   // Gouraud/Phong: per-triangle corner data, 3 entries per triangle
-  std::vector<Color> corner_colors;  // Gouraud: lit color at each corner
+  std::vector<float> corner_light;   // Gouraud: light amount at each corner
   std::vector<Vec3D> corner_normals; // normal at each corner
   std::vector<char> corners_ready;   // 1 per triangle: corner data computed?
   float render_scale = 1.0f; // 1 = full resolution, 0.5 = half (menu)
@@ -41,11 +41,13 @@ public:
   int shading = SHADING_FLAT; // SHADING_FLAT / _GOURAUD / _PHONG (Shading.h)
   bool calculateNormals = true; // flat only
   bool backface_cull = true;
+  bool use_textures = true; // off = plain green
   Px2D mousepos;
 #pragma endregion
 
   bool OnUserCreate() {
-    mesh = OBJLoader("Object/bmw.obj");
+    // mesh = OBJLoader("Object/bmw.obj"); // no textures
+    mesh = OBJLoader("Object/full_model.obj"); // textured (full_model.mtl)
     object.position = {0, 0, 0}; // was z_offset = 2
     camera.position = {-2, 3, -2}; // above the floor, so the grid isn't edge-on
     grid = make_grid(10);
@@ -106,7 +108,7 @@ public:
     // 3. Render
     if (shading != SHADING_FLAT) {
       fb.ClearTriangleIds();
-      corner_colors.resize(transformed_tri.size() * 3);
+      corner_light.resize(transformed_tri.size() * 3);
       corner_normals.resize(transformed_tri.size() * 3);
       corners_ready.assign(transformed_tri.size(), 0);
     }
@@ -117,9 +119,14 @@ public:
         continue;
 
       if (shading == SHADING_FLAT) {
-        // one color for the whole triangle
+        // one color for the whole triangle (texture: read at its center)
+        Color base = col::GREEN;
+        if (use_textures && tri.texture >= 0)
+          base = mesh.textures[tri.texture].sample(
+              (tri.uv[0].u + tri.uv[1].u + tri.uv[2].u) / 3.0f,
+              (tri.uv[0].v + tri.uv[1].v + tri.uv[2].v) / 3.0f);
         Color shaded =
-            Shade_triangle(tri, light_view, col::GREEN, calculateNormals,
+            Shade_triangle(tri, light_view, base, calculateNormals,
                            specularity, exposure); // 2nd sector = -1 -1
         fb.Fill_triangle(tri, shaded, camera.fov);
 
@@ -142,32 +149,47 @@ public:
 
         // corner data, worked out the first time this triangle is needed
         // (most triangles are hidden or too small to win any pixel)
+        const Triangle &tri = transformed_tri[id];
         if (!corners_ready[id]) {
-          const Triangle &tri = transformed_tri[id];
           for (int k = 0; k < 3; ++k) {
             corner_normals[id * 3 + k] = vertex_normal(tri, k);
             if (shading == SHADING_GOURAUD)
-              corner_colors[id * 3 + k] =
-                  Shade_normal(corner_normals[id * 3 + k], light_view,
-                               col::GREEN, specularity, exposure);
+              corner_light[id * 3 + k] =
+                  Light_intensity(corner_normals[id * 3 + k], light_view);
           }
           corners_ready[id] = 1;
         }
 
+        // surface color: green, or the texture at this pixel
+        Color base = col::GREEN;
+        if (use_textures && tri.texture >= 0) {
+          // Perspective correction: w0/w1/w2 are even steps on the SCREEN,
+          // but far parts of a triangle are squeezed. Dividing each weight
+          // by its corner's depth (and rescaling to add up to 1) undoes that,
+          // otherwise the texture bends and slides on big triangles.
+          float p0 = w0 / tri.p[0].z;
+          float p1 = w1 / tri.p[1].z;
+          float p2 = w2 / tri.p[2].z;
+          float sum = p0 + p1 + p2;
+          p0 /= sum;
+          p1 /= sum;
+          p2 /= sum;
+          float u = p0 * tri.uv[0].u + p1 * tri.uv[1].u + p2 * tri.uv[2].u;
+          float v = p0 * tri.uv[0].v + p1 * tri.uv[1].v + p2 * tri.uv[2].v;
+          base = mesh.textures[tri.texture].sample(u, v);
+        }
+
         Color color;
         if (shading == SHADING_GOURAUD) {
-          // blend the 3 corner colors
-          const Color *c = &corner_colors[id * 3];
-          color = {(Uint8)(c[0].r * w0 + c[1].r * w1 + c[2].r * w2),
-                   (Uint8)(c[0].g * w0 + c[1].g * w1 + c[2].g * w2),
-                   (Uint8)(c[0].b * w0 + c[1].b * w1 + c[2].b * w2),
-                   (Uint8)(c[0].a * w0 + c[1].a * w1 + c[2].a * w2)};
+          // blend the 3 corner light amounts, then color this pixel
+          const float *L = &corner_light[id * 3];
+          float light_amount = L[0] * w0 + L[1] * w1 + L[2] * w2;
+          color = Shade_intensity(light_amount, base, specularity, exposure);
         } else {
           // Phong: blend the 3 corner normals, then light this pixel
           const Vec3D *n = &corner_normals[id * 3];
           Vec3D normal = (n[0] * w0 + n[1] * w1 + n[2] * w2).normalized();
-          color = Shade_normal(normal, light_view, col::GREEN, specularity,
-                               exposure);
+          color = Shade_normal(normal, light_view, base, specularity, exposure);
         }
         fb.screen_buffer[i] = color.to_hex();
       }
