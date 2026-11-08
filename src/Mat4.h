@@ -28,6 +28,19 @@ struct Mat4 {
             m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z + m[2][3]};
   }
 
+  // Undo this matrix, if it's only rotations + a move (no scaling):
+  // the rotation part flips across its diagonal, the move is undone after.
+  Mat4 inverse_rigid() const {
+    Mat4 r;
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j)
+        r.m[i][j] = m[j][i];
+    for (int i = 0; i < 3; ++i)
+      r.m[i][3] = -(r.m[i][0] * m[0][3] + r.m[i][1] * m[1][3] +
+                    r.m[i][2] * m[2][3]);
+    return r;
+  }
+
   // directions (normals): w = 0, so translation is ignored
   Vec3D transform_dir(const Vec3D &v) const {
     return {m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z,
@@ -74,6 +87,7 @@ inline Triangle transform_triangle(const Triangle &tri, const Mat4 &mat) {
   Triangle out;
   out.color = tri.color;
   out.texture = tri.texture;
+  out.material = tri.material;
   for (int i = 0; i < 3; ++i) {
     out.uv[i] = tri.uv[i];
     out.p[i] = mat.transform_point(tri.p[i]);

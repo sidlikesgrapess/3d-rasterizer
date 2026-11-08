@@ -1,7 +1,10 @@
 #pragma once
 
 #include "Mesh.h"
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -15,10 +18,14 @@ inline std::string folder_of(const std::string &path) {
   return (slash == std::string::npos) ? "" : path.substr(0, slash + 1);
 }
 
-// MATERIAL LOADER (.mtl): for each material, load its map_Kd image (each
-// image file only once) and remember which texture the material uses.
+// MATERIAL LOADER (.mtl): for each material, read its color and shininess
+// into mesh.materials, load its map_Kd image (each image file only once)
+// and remember which texture the material uses. Images are looked for in
+// tex_folder first (by file name), then where the .mtl says.
 inline void load_mtl(const std::string &mtlPath, Mesh &mesh,
-                     std::map<std::string, int> &material_texture) {
+                     std::map<std::string, int> &material_texture,
+                     std::map<std::string, int> &material_id,
+                     const std::string &tex_folder) {
   std::ifstream file(mtlPath);
   if (!file.is_open()) {
     std::cerr << "Error opening file: " << mtlPath << std::endl;
@@ -32,13 +39,37 @@ inline void load_mtl(const std::string &mtlPath, Mesh &mesh,
     ss >> type;
     if (type == "newmtl") {
       ss >> material;
+      Material m;
+      m.name = material;
+      mesh.materials.push_back(m);
+      material_id[material] = (int)mesh.materials.size() - 1;
+    } else if (mesh.materials.empty()) {
+      continue; // lines before the first newmtl
+    } else if (type == "Kd") { // color, 0..1
+      float r, g, b;
+      ss >> r >> g >> b;
+      mesh.materials.back().color = {(Uint8)(r * 255), (Uint8)(g * 255),
+                                     (Uint8)(b * 255), 255};
+    } else if (type == "Ns") { // shininess 0..1000 (Blender: (1-rough)^2*1000)
+      float ns;
+      ss >> ns;
+      mesh.materials.back().roughness =
+          1.0f - std::sqrt(std::clamp(ns / 1000.0f, 0.0f, 1.0f));
+    } else if (type == "Pr") { // roughness (newer .mtl files)
+      ss >> mesh.materials.back().roughness;
+    } else if (type == "Pm") { // metallic (newer .mtl files)
+      ss >> mesh.materials.back().metallic;
     } else if (type == "map_Kd") {
       std::string path;
       std::getline(ss >> std::ws, path); // rest of line: may contain spaces
       while (!path.empty() && (path.back() == '\r' || path.back() == ' '))
         path.pop_back();
+      std::string file_name = path.substr(folder_of(path).size());
       bool absolute = path.size() > 1 && (path[1] == ':' || path[0] == '/');
-      if (!absolute)
+      if (!tex_folder.empty() &&
+          std::filesystem::exists(tex_folder + file_name))
+        path = tex_folder + file_name; // e.g. Obj_load/car_tex/paint.png
+      else if (!absolute)
         path = folder_of(mtlPath) + path; // relative to the .mtl file
 
       if (loaded.count(path)) {
@@ -55,8 +86,8 @@ inline void load_mtl(const std::string &mtlPath, Mesh &mesh,
   }
 }
 
-// OBJECT LOADER (.obj)
-inline Mesh OBJLoader(std::string filePath) {
+// OBJECT LOADER (.obj). tex_folder: where to look for its textures first.
+inline Mesh OBJLoader(std::string filePath, std::string tex_folder = "") {
   std::ifstream file(filePath);
   if (!file.is_open()) {
     std::cerr << "Error opening file: " << filePath << std::endl;
@@ -65,7 +96,9 @@ inline Mesh OBJLoader(std::string filePath) {
   Mesh mesh;
   std::vector<UV> uvs;                         // all vt lines
   std::map<std::string, int> material_texture; // material name -> texture
+  std::map<std::string, int> material_id;      // material name -> material
   int current_texture = -1;                    // set by usemtl
+  int current_material = -1;                   // set by usemtl
   std::string line;
   while (std::getline(file, line)) {
     std::stringstream ss(line);
@@ -82,12 +115,14 @@ inline Mesh OBJLoader(std::string filePath) {
     } else if (type == "mtllib") {
       std::string name;
       ss >> name;
-      load_mtl(folder_of(filePath) + name, mesh, material_texture);
+      load_mtl(folder_of(filePath) + name, mesh, material_texture,
+               material_id, tex_folder);
     } else if (type == "usemtl") {
       std::string name;
       ss >> name;
       current_texture =
           material_texture.count(name) ? material_texture[name] : -1;
+      current_material = material_id.count(name) ? material_id[name] : -1;
     } else if (type == "f") {
       std::vector<int> face_v;
       std::vector<int> face_vt;
@@ -127,6 +162,7 @@ inline Mesh OBJLoader(std::string filePath) {
         }
 
         tri.color = col::RANDOM();
+        tri.material = current_material;
         mesh.tris.push_back(tri);
       }
     } else if (type == "vn") {
@@ -134,6 +170,16 @@ inline Mesh OBJLoader(std::string filePath) {
       ss >> x >> y >> z;
       mesh.vert_normals.push_back({x, y, z});
     }
+  }
+  // triangles with no (known) material get a default one
+  bool missing = false;
+  for (const Triangle &tri : mesh.tris)
+    missing |= (tri.material < 0);
+  if (missing || mesh.materials.empty()) {
+    mesh.materials.push_back(Material{});
+    for (Triangle &tri : mesh.tris)
+      if (tri.material < 0)
+        tri.material = (int)mesh.materials.size() - 1;
   }
   return mesh;
 }

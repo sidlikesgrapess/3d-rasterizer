@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Color.h"
+#include "Material.h"
 #include "Texture.h"
 #include "Vec3.h"
 #include <vector>
@@ -16,11 +17,13 @@ struct Triangle {
   Color color = col::WHITE;
   UV uv[3] = {};    // texture coordinate at each corner
   int texture = -1; // index into Mesh::textures, -1 = no texture
+  int material = 0; // index into Mesh::materials
 };
 
 struct Mesh {
   std::vector<Vec3D> vertices;
   std::vector<Triangle> tris;
   std::vector<Vec3D> vert_normals;
-  std::vector<Texture> textures; // loaded from the .mtl file
+  std::vector<Texture> textures;   // loaded from the .mtl file
+  std::vector<Material> materials; // loaded from the .mtl file (at least 1)
 };

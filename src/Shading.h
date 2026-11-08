@@ -12,41 +12,71 @@
 // The 3 shading modes picked in the menu
 enum ShadingMode { SHADING_FLAT, SHADING_GOURAUD, SHADING_PHONG };
 
-// How much light hits a surface with this normal (0.15 .. 1)
-inline float Light_intensity(Vec3D normal, Vec3D Light_v) {
-  float light_intensity = normal.dot(Light_v.normalized());
-  return std::clamp(light_intensity, 0.15f, 1.0f);
-}
+// MATERIALS
+// The light at a point is split in two steps:
+//  1. Light_terms: the parts that only depend on directions (normal, light,
+//     camera) and roughness. Gouraud works these out at the 3 corners and
+//     blends them; flat once per triangle; Phong/ray tracing once per pixel.
+//  2. Shade_material: mixes those with the surface color and the material.
 
-// Final color from the light amount + the surface color (green or texture)
-inline Color Shade_intensity(float light_intensity, Color color,
-                             float specularity, float exposure) {
-  // x^8 as 3 multiplies instead of pow()
-  float li2 = light_intensity * light_intensity;
-  float li4 = li2 * li2;
-  float specular = li4 * li4;
-  Color spec = col::WHITE;
-  spec = spec * specular;
+struct LightTerms {
+  float diffuse = 0;   // how much light hits (0.15 = ambient, 1 = full sun)
+  float highlight = 0; // the shiny spot's strength (before its color)
+  float facing = 1;    // 1 = faces the camera, 0 = seen edge-on
+};
 
-  // log10 is slow and exposure rarely changes: only recompute when it changes
-  static float cached_exposure = -1.0f;
-  static float exposure_scale = 0.0f;
-  if (exposure != cached_exposure) {
-    cached_exposure = exposure;
-    exposure_scale = std::log10(exposure * 10 + 1.0f);
+// normal: inward, like face_normal(). light_v: the way the light travels.
+// view_dir: from the camera to the point. intensity: how strong the light is
+// here (1 = sun; a point light gets weaker with distance, see Light.h).
+inline LightTerms Light_terms(Vec3D normal, Vec3D light_v, Vec3D view_dir,
+                              float roughness, float intensity = 1.0f) {
+  Vec3D n = normal * -1.0f; // outward
+  Vec3D to_light = (light_v * -1.0f).normalized();
+  Vec3D to_eye = (view_dir * -1.0f).normalized();
+  LightTerms t;
+  float n_dot_l = n.dot(to_light);
+  // at least 0.15 (ambient). A strong point light can go above 1.
+  t.diffuse = std::max(n_dot_l * intensity, 0.15f);
+  t.facing = std::clamp(n.dot(to_eye), 0.0f, 1.0f);
+  if (n_dot_l > 0.0f) {
+    // Blinn-Phong: "half" is halfway between the light and the eye. The
+    // closer the normal is to it, the brighter the shiny spot.
+    Vec3D half = (to_light + to_eye).normalized();
+    float r = std::max(roughness, 0.05f);
+    float shininess = 2.0f / (r * r) - 2.0f; // smooth = small, sharp spot
+    // (shininess + 8) / 8: a smaller spot gets brighter, so smooth and
+    // rough surfaces reflect the same total amount of light
+    t.highlight = (shininess + 8.0f) / 8.0f *
+                  std::pow(std::max(n.dot(half), 0.0f), shininess) * n_dot_l *
+                  intensity;
   }
-
-  return ((color * light_intensity * exposure_scale) +
-          spec * specularity * exposure); // some type of faked exposure ig
+  return t;
 }
 
-// Lighting for ONE normal. Flat calls it once per triangle, Phong once per
-// pixel. (Gouraud lights the corners with Light_intensity, blends that, then
-// calls Shade_intensity per pixel.)
-inline Color Shade_normal(Vec3D normal, Vec3D Light_v, Color color,
-                          float specularity, float exposure) {
-  return Shade_intensity(Light_intensity(normal, Light_v), color, specularity,
-                         exposure);
+// Final color. base = texture or material color. reflection = what a mirror
+// would see here: the grey background, or what a reflection ray hit (ray
+// tracing). exposure_scale = log10(exposure * 10 + 1), worked out per frame.
+inline Color Shade_material(const LightTerms &t, Color base,
+                            const Material &m, Color reflection,
+                            float exposure_scale) {
+  // Fresnel: everything reflects more when seen edge-on (Schlick's
+  // (1 - cos)^5). Rough surfaces less so.
+  float e = 1.0f - t.facing;
+  float edge = e * e * e * e * e;
+  float c[3] = {base.r / 255.0f, base.g / 255.0f, base.b / 255.0f};
+  float env[3] = {reflection.r / 255.0f, reflection.g / 255.0f,
+                  reflection.b / 255.0f};
+  float out[3];
+  for (int k = 0; k < 3; ++k) { // red, green, blue
+    // how much is reflected head-on: 4% white for non-metals, the surface
+    // color for metals
+    float f0 = 0.04f + (c[k] - 0.04f) * m.metallic;
+    float fresnel = f0 + (std::max(1.0f - m.roughness, f0) - f0) * edge;
+    float diffuse = c[k] * t.diffuse * (1.0f - m.metallic); // metals: none
+    float v = (diffuse + f0 * t.highlight + fresnel * env[k]) * exposure_scale;
+    out[k] = std::min(v, 1.0f) * 255.0f;
+  }
+  return {(Uint8)out[0], (Uint8)out[1], (Uint8)out[2], 255};
 }
 
 // Face normal from the triangle's corners
@@ -64,18 +94,13 @@ inline Vec3D vertex_normal(const Triangle &tri, int i) {
   return (tri.n[i] * -1.0f).normalized();
 }
 
-// Flat shading: one color for the whole triangle
-inline Color Shade_triangle(const Triangle &tri, Vec3D Light_v,
-                            Color color, bool calculateNormals = true,
-                            float specularity = 0.8f, float exposure = 1.0f) {
-  Vec3D normal;
+// Flat shading: one normal for the whole triangle (calculated, or the
+// average of the .obj normals flipped inward)
+inline Vec3D flat_normal(const Triangle &tri, bool calculateNormals) {
+  if (calculateNormals)
+    return face_normal(tri);
   Vec3D cam = {0, 0, 0};
-  if (calculateNormals) {
-    normal = face_normal(tri);
-  } else {
-    normal = cam - ((tri.n[0] + tri.n[1] + tri.n[2]).normalized());
-  }
-  return Shade_normal(normal, Light_v, color, specularity, exposure);
+  return cam - ((tri.n[0] + tri.n[1] + tri.n[2]).normalized());
 }
 
 inline bool isTriangleCulled(const Triangle &tri, float cull_dist,

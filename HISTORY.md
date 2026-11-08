@@ -145,3 +145,98 @@ Logic and structural changes since commit `e313d3b` ("deleted").
     - Changed the AI note to say that AI also wrote parts of the code, pointing to `HISTORY.md`.
 
 24. **User:** Asked to remove the AI line from `README.md`. **AI:** Removed it. The boilerplate sentence stays.
+
+25. **AI:** Added a Blender-style mouse camera.
+    - `Camera` is now an orbit camera with `target` and `distance`. `update_orbit()` computes `position` from them, plus yaw and pitch, at the start of every frame.
+    - Brought back `Engine3D::HandleEvent(e)`, which `main()` calls for every event. It only acts on the main window:
+      - Middle-drag orbits: x changes yaw, y changes pitch, and pitch is clamped to ±1.55.
+      - Shift + middle-drag pans: the target moves along the camera's right and up axes, scaled so the scene follows the mouse.
+      - The wheel zooms by multiplying the distance by 0.9 or 1.1.
+    - The default view is unchanged. Target (0, 0.62, 0) at distance 3.7 gives a position of about (-2, 3, -2) with the same yaw and pitch.
+    - Menu: the camera's position field was replaced by target and distance, because position is now computed. Added the mouse controls to the menu text.
+    - `README.md`: added the mouse controls and removed that item from WIP.
+
+26. **AI:** Made rendering multithreaded. The output is pixel-identical to single-threaded on both models, all modes, near and far.
+    - Added `src/Parallel.h`:
+      - `parallel_for(count, fn)` runs on all cores. Threads keep taking the next job, which spreads the work evenly.
+      - `parallel_for_chunks()` hands out ranges of jobs.
+    - `Engine3D` now renders in three parallel steps:
+      1. **Per-triangle pass:** transform, cull, project, then work out the flat color or the corner data. It fills the new `visible`, `projected` and `flat_colors` arrays. The lazy `corners_ready` was removed.
+      2. **Fill:** the screen is split into 32-row strips, and each thread fills only its own rows, so no two threads touch the same pixel. Triangles are still drawn in the same order.
+      3. **Gouraud/Phong resolve:** split by the same strips.
+    - The static FOV and exposure caches are filled before the threads start, so the threads only read them.
+    - `Framebuffer`:
+      - `Fill_triangle` and `Fill_triangle_deferred` now take already-projected corners plus a row range (`y0`, `y1`).
+      - The flat-top and flat-bottom fills clip their row loop to that range.
+    - Speed, comparing runs back to back:
+      - Car: flat 43 → 19 ms, Gouraud 71 → 28 ms, Phong 75 → 29 ms.
+      - Car close-up: Gouraud 200 → 60 ms, Phong 230 → 66 ms.
+      - Character model: about 1.2–2.7× faster.
+    - `README.md`: added multithreading to the functions list. Raytraced shadows replace it in the WIP list.
+
+27. **AI:** Added simple ray tracing as a "ray tracing" checkbox in the menu. When it's on, it replaces triangle filling, and the shading options are greyed out.
+    - Added `src/RayTracer.h`:
+      - `Ray` and `Hit` structs.
+      - `ray_triangle()`, the Möller–Trumbore test.
+      - `ray_box()`, a slab test.
+      - A median-split `BVH`: a box tree with up to 4 triangles per leaf, built once in `OnUserCreate` in the mesh's own coordinates. It has a closest-hit and an any-hit `intersect()`.
+    - Added `Mat4::inverse_rigid()`, used to move rays into mesh coordinates instead of moving the mesh.
+    - Added `Engine3D::render_raytraced()`. It fires one ray per pixel, in parallel by 32-row strips:
+      - **Hits the mesh:** gets a smooth normal from the hit weights, like Phong, and an exact texture coordinate. One shadow ray goes toward the light, and a blocked point gets 0.15 light.
+      - **Misses but hits the floor at y = 0 within ±10:** if the mesh blocks the light there, the existing floor pixel is darkened to 60%. The grid and axes are drawn before this, so they stay visible.
+    - Rasterized output is unchanged: pixel-identical in all 12 test cases with ray tracing off.
+    - Speed with 12 threads:
+      - Character model: about 57 ms at full resolution, 20 ms at render scale 0.5.
+      - Car: about 395 ms at full resolution, 120 ms at 0.5.
+      - BVH build: 8 ms for the character, 144 ms for the car.
+    - `README.md`: added ray tracing to the functions and controls. WIP now lists reflections and soft shadows.
+
+28. **User:** asked for antialiasing.
+    **AI:** added supersampling antialiasing (SSAA), an "antialiasing (2x2)" checkbox in the menu.
+    - When on, the frame is drawn 2x wider and taller, so there are 4 samples per pixel. `Framebuffer::Draw()` then averages each 2x2 block into one shown pixel (in parallel) before sending it to SDL.
+    - Works the same for flat, Gouraud, Phong and ray tracing. The light circle is scaled up to keep its size. The grid lines come out thinner and softer.
+    - Limited to 2x2: at 2880x1800, 3x3 would need about 1 GB of buffers.
+    - Cost is about 3x the frame time (character close-up: Phong 18 → 50 ms, ray tracing 100 → 365 ms). Lowering the render scale offsets it.
+
+29. **User:** asked how to make materials (mainly metallic, glossy and diffuse), then said to implement the suggested plan.
+    **AI:** added materials, a new lighting model, reflections in the ray tracer and a material menu.
+    - **Material** (new `src/Material.h`): name, color, metallic (0..1) and roughness (0..1). Diffuse = metallic 0, roughness 1. Glossy = metallic 0, low roughness. Metallic = metallic 1, low roughness.
+    - **Loading:** `Mesh` has `materials` and every `Triangle` has a `material` index. `load_mtl` now also reads `Kd` (color), `Ns` (converted to roughness the way Blender exports it, 1 - sqrt(Ns/1000)), and `Pr`/`Pm` (roughness/metallic) if present. Triangles with no known material get a default one (green, roughness 0.5), so there's always at least one.
+    - **Lighting:** the old `Light_intensity` / `Shade_intensity` / `Shade_normal` / `Shade_triangle` (fixed x^8 highlight and the global specularity) are replaced by two steps in `Shading.h`:
+      - `Light_terms(normal, light, view direction, roughness)` gives the diffuse amount (still 0.15..1), a Blinn-Phong highlight whose sharpness comes from roughness, and how much the surface faces the camera.
+      - `Shade_material(terms, base color, material, reflection, exposure_scale)` mixes them. Metals have no diffuse and a highlight tinted by their color, while non-metals get a 4% white highlight. Everything reflects more when seen edge-on (Fresnel), rough surfaces less so.
+      - Flat works these out once per triangle, Gouraud at the corners and blends the 3 values, and Phong and ray tracing per pixel. The rasterizer has no reflection rays, so mirrors see the grey background.
+    - **Ray tracer:** the per-pixel code moved into `trace(ray, light, depth, out)`. Materials with roughness < 0.5 send a reflection ray (up to 2 bounces) and mix what it hits with the background; rougher ones just reflect the background.
+    - **Base color:** the material's color is used when there's no texture or textures are off (it used to be fixed green).
+    - **Exposure:** `exposure_scale` is computed once per frame in the engine, which replaces the static cache in `Shade_intensity`.
+    - **Menu:** the specularity slider is removed. A "Materials" list (click to open) shows each material, and clicking one shows its color, metallic and roughness.
+    - Verified on a smooth test sphere: diffuse, glossy and metal look the same in flat, Gouraud, Phong and ray tracing. The rasterized images differ from before, as expected, because the lighting model changed.
+
+30. **User:** asked to support many objects: load every .obj in the `Obj_load` folder, with textures in a folder named `<file name>_tex`.
+    **AI:** replaced the single mesh with a list of objects.
+    - **`SceneObject`** (new `src/SceneObject.h`): name (the file name), mesh, world transform and BVH.
+      - `load_folder("Obj_load")` loads every `.obj` there in name order and builds each object's BVH.
+      - It places the objects side by side along x (0.5 apart) and centers the row on x = 0.
+    - **Textures:** the `.obj`/`.mtl` loader takes a texture folder (`Obj_load/<name>_tex/`). For each `map_Kd` it first looks there by file name, then falls back to the path the `.mtl` gives.
+    - **Rasterizer:** `Engine3D` has `objects` instead of `mesh`/`object`/`bvh`.
+      - `tri_refs` lists every object's triangles as one list (object, index), so the 3 parallel steps work as before; each triangle uses its own object's matrix, materials and textures.
+      - Per object, the model, inverse and model-view matrices are worked out once per frame.
+    - **Ray tracing:** now done in world coordinates.
+      - `intersect_scene` moves the ray into each object's coordinates and tests its BVH, keeping the closest hit. Moving/rotating keeps lengths, so distances compare across objects.
+      - Normals are moved back to world. Shadows and reflections work between objects.
+    - **Menu:** lists Light, Camera, then every object by name. Clicking a name shows its transform. Its arrow opens its materials.
+    - Set up `Obj_load/` with copies of `full_model` (textures in `full_model_tex/`) and `monkey`. `Object/` is untouched.
+    - `README.md`: how to add models, and multiple objects moved from WIP to the functions.
+
+31. **User:** in ray tracing, the top of a box was lit while the light marker sat inside the box. Asked for 2 light types in `Light.h`: directional and point.
+    **AI:** this wasn't a bug: the light was directional (a sun infinitely far away), and the marker only showed its direction. Added a point light next to it.
+    - **`Light`** now has `type` (`LIGHT_DIRECTIONAL` / `LIGHT_POINT`), `target` (where a directional light shines to; it used to always be the origin) and `strength` (point only).
+      - `direction_at(point)`: one direction for the sun, or from the bulb to the point.
+      - `strength_at(point)`: 1 for the sun, or `strength / distance²` for the bulb.
+      - `distance_to(point)`: infinite for the sun, the real distance for the bulb.
+    - **`Light_terms`** takes the strength. Diffuse is now `max(n·l * strength, 0.15)`: still 0.15..1 for the sun, but a close bulb can go above 1. The highlight is scaled the same way.
+    - **Rasterizer:** a copy of the light is moved into camera coordinates (position and target) each frame. Flat, Gouraud and Phong ask it for the direction and strength at the triangle center, corner or pixel.
+    - **Ray tracer:** new `in_shadow(point)` is used for surfaces and the floor. The shadow ray only counts blockers closer than the light, so a wall behind a bulb doesn't shadow it. `trace` no longer takes a light direction.
+    - **Display and controls:** a directional light draws a yellow line from its position to its target. Left-dragging now moves the light around its target instead of the origin.
+    - **Menu:** under Light there's a directional/point switch, then position, plus target (directional) or strength (point).
+    - Checked with a point light inside a box: the outside top and walls stay dark, the inside is lit, and in ray tracing the box shadows the floor around it.

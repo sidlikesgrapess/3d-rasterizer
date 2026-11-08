@@ -48,6 +48,7 @@ int main() {
       if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_CLOSE)
         running = false;
       menu.HandleEvent(e);
+      engine.HandleEvent(e); // mouse camera (main window only)
     }
 
     Uint64 currentTime = SDL_GetPerformanceCounter();

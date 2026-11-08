@@ -1,4 +1,4 @@
 #pragma once
 
-const int screenW = 1920;
-const int screenH = 1080;
+const int screenW = 2880;
+const int screenH = 1800;

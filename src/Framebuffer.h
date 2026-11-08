@@ -4,6 +4,7 @@
 #include "Config.h"
 #include "Display.h"
 #include "Mesh.h"
+#include "Parallel.h"
 #include "Projection.h"
 #include "Vec3.h"
 #include <algorithm>
@@ -28,6 +29,11 @@ struct Framebuffer {
   std::vector<float> w0_buffer = std::vector<float>(screenW * screenH);
   std::vector<float> w1_buffer = std::vector<float>(screenW * screenH);
 
+  // Antialiasing (supersampling): the buffers above are drawn aa times wider
+  // and taller, then every aa x aa block is averaged into one shown pixel.
+  int aa = 1;
+  std::vector<uint32_t> aa_buffer; // the averaged (shown) image
+
   // change the render size (render scale in the menu)
   void Resize(int w, int h) {
     width = w;
@@ -50,17 +56,39 @@ struct Framebuffer {
 
   // ALL DRAW FUNCTIONS
   void Draw() { // once per frame
-    // the texture must match the buffer size: recreate it if the size changed
+    int out_w = width / aa, out_h = height / aa;
+    const uint32_t *pixels = screen_buffer.data();
+    if (aa > 1) {
+      aa_buffer.resize(out_w * out_h);
+      parallel_for(out_h, [&](int y) {
+        for (int x = 0; x < out_w; ++x) {
+          // add up each color channel (byte) of the aa x aa block
+          uint32_t sum[4] = {0, 0, 0, 0};
+          for (int sy = 0; sy < aa; ++sy)
+            for (int sx = 0; sx < aa; ++sx) {
+              uint32_t p = screen_buffer[(y * aa + sy) * width + x * aa + sx];
+              for (int c = 0; c < 4; ++c)
+                sum[c] += (p >> (c * 8)) & 0xFF;
+            }
+          uint32_t out = 0;
+          for (int c = 0; c < 4; ++c)
+            out |= (sum[c] / (aa * aa)) << (c * 8); // average
+          aa_buffer[y * out_w + x] = out;
+        }
+      });
+      pixels = aa_buffer.data();
+    }
+
+    // the texture must match the shown size: recreate it if the size changed
     int tw = 0, th = 0;
     SDL_QueryTexture(frameTexture, nullptr, nullptr, &tw, &th);
-    if (tw != width || th != height) {
+    if (tw != out_w || th != out_h) {
       SDL_DestroyTexture(frameTexture);
       frameTexture =
           SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
-                            SDL_TEXTUREACCESS_STREAMING, width, height);
+                            SDL_TEXTUREACCESS_STREAMING, out_w, out_h);
     }
-    SDL_UpdateTexture(frameTexture, nullptr, screen_buffer.data(),
-                      width * sizeof(uint32_t));
+    SDL_UpdateTexture(frameTexture, nullptr, pixels, out_w * sizeof(uint32_t));
     SDL_RenderClear(renderer);
     SDL_RenderCopy(renderer, frameTexture, nullptr, nullptr); // stretches
     SDL_RenderPresent(renderer);
@@ -148,14 +176,16 @@ struct Framebuffer {
     DrawLine(p2.x, p2.y, p0.x, p0.y, color);
   }
 
-  void Fill_flat_bottom_triangle(Px2D p0, Px2D p1, Px2D p2, Color color) {
+  // y0..y1-1 = the rows this call may draw (a thread's strip of the screen)
+  void Fill_flat_bottom_triangle(Px2D p0, Px2D p1, Px2D p2, Color color,
+                                 int y0, int y1) {
     if (p1.y == p0.y)
       return;
     float invslope1 = (float)(p1.x - p0.x) / (float)(p1.y - p0.y);
     float invslope2 = (float)(p2.x - p0.x) / (float)(p2.y - p0.y);
 
-    int startY = p0.y;
-    int endY = p1.y;
+    int startY = std::max(p0.y, y0);   // only rows inside the strip
+    int endY = std::min(p1.y, y1 - 1);
     float totalDy = (float)(p1.y - p0.y);
 
     for (int y = startY; y <= endY; y++) {
@@ -169,14 +199,15 @@ struct Framebuffer {
     }
   }
 
-  void Fill_flat_top_triangle(Px2D p0, Px2D p1, Px2D p2, Color color) {
+  void Fill_flat_top_triangle(Px2D p0, Px2D p1, Px2D p2, Color color, int y0,
+                              int y1) {
     if (p2.y == p0.y)
       return;
     float invslope1 = (float)(p2.x - p0.x) / (float)(p2.y - p0.y); // slope
     float invslope2 = (float)(p2.x - p1.x) / (float)(p2.y - p1.y);
 
-    int startY = p0.y;
-    int endY = p2.y;
+    int startY = std::max(p0.y, y0);   // only rows inside the strip
+    int endY = std::min(p2.y, y1 - 1);
     float totalDy = (float)(p2.y - p0.y);
 
     for (int y = startY; y <= endY; y++) {
@@ -196,11 +227,10 @@ struct Framebuffer {
   // weights (w0, w1, w2: how close it is to each corner, they add up to 1).
   // No color is computed here: the engine shades each pixel ONCE afterwards,
   // so pixels that get covered by a closer triangle cost nothing extra.
-  void Fill_triangle_deferred(const Triangle &tri, int id, float fovDegrees) {
-    Px2D p0 = screen(tri.p[0], fovDegrees, width, height);
-    Px2D p1 = screen(tri.p[1], fovDegrees, width, height);
-    Px2D p2 = screen(tri.p[2], fovDegrees, width, height);
-
+  // p0..p2 = corners already projected with screen().
+  // y0..y1-1 = the rows this call may draw (a thread's strip of the screen).
+  void Fill_triangle_deferred(Px2D p0, Px2D p1, Px2D p2, int id, int y0,
+                              int y1) {
     // edge(a, b, x, y): which side of the line a->b the point (x, y) is on
     auto edge = [](Px2D a, Px2D b, float x, float y) {
       return (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
@@ -226,8 +256,8 @@ struct Framebuffer {
     // padding never reaches them.
     int minX = std::max(0, std::min({p0.x, p1.x, p2.x}));
     int maxX = std::min(width - 1, std::max({p0.x, p1.x, p2.x}));
-    int minY = std::max(0, std::min({p0.y, p1.y, p2.y}));
-    int maxY = std::min(height - 1, std::max({p0.y, p1.y, p2.y}));
+    int minY = std::max({0, y0, std::min({p0.y, p1.y, p2.y})});
+    int maxY = std::min({height - 1, y1 - 1, std::max({p0.y, p1.y, p2.y})});
 
     for (int y = minY; y <= maxY; ++y) {
       for (int x = minX; x <= maxX; ++x) {
@@ -260,12 +290,9 @@ struct Framebuffer {
     }
   }
 
-  void Fill_triangle(const Triangle &tri, Color color,
-                     float fovDegrees = 90.0f) {
-    Px2D p0 = screen(tri.p[0], fovDegrees, width, height);
-    Px2D p1 = screen(tri.p[1], fovDegrees, width, height);
-    Px2D p2 = screen(tri.p[2], fovDegrees, width, height);
-
+  // p0..p2 = corners already projected with screen().
+  // y0..y1-1 = the rows this call may draw (a thread's strip of the screen).
+  void Fill_triangle(Px2D p0, Px2D p1, Px2D p2, Color color, int y0, int y1) {
     if (p0.y > p1.y)
       std::swap(p0, p1);
     if (p0.y > p2.y)
@@ -277,16 +304,16 @@ struct Framebuffer {
       return;
 
     if (p1.y == p2.y) {
-      Fill_flat_bottom_triangle(p0, p1, p2, color);
+      Fill_flat_bottom_triangle(p0, p1, p2, color, y0, y1);
     } else if (p0.y == p1.y) {
-      Fill_flat_top_triangle(p0, p1, p2, color);
+      Fill_flat_top_triangle(p0, p1, p2, color, y0, y1);
     } else {
       float t = (float)(p1.y - p0.y) / (float)(p2.y - p0.y);
       int p3_x = p0.x + (int)(t * (float)(p2.x - p0.x));
       float p3_z = p0.z + t * (p2.z - p0.z);
       Px2D p3 = {p3_x, p1.y, p3_z};
-      Fill_flat_bottom_triangle(p0, p1, p3, color);
-      Fill_flat_top_triangle(p1, p3, p2, color);
+      Fill_flat_bottom_triangle(p0, p1, p3, color, y0, y1);
+      Fill_flat_top_triangle(p1, p3, p2, color, y0, y1);
     }
   }
 };
